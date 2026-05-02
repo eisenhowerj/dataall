@@ -19,9 +19,6 @@ permissions:
 
 jobs:
   cdk-nag:
-    strategy:
-      matrix:
-        python-version: [3.12]
     env:
       CDK_DEFAULT_REGION: eu-west-1
       CDK_DEFAULT_ACCOUNT: 111111111111
@@ -32,18 +29,16 @@ jobs:
         uses: actions/checkout@v4
       - name: Set up Node.js
         uses: actions/setup-node@v4
-      - name: Install CDK 
+      - name: Install CDK
         run: |
           npm install -g aws-cdk cdk-nag
           cdk --version
-      - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v5
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v5
         with:
-          python-version: ${{ matrix.python-version }}
-      - name: Upgrade Pip
-        run: python -m pip install --upgrade pip
+          python-version: "3.12"
       - name: Install Requirements
-        run: python -m pip install -r deploy/requirements.txt
+        run: uv sync --group deploy
       - name: CDK Synth
         run: |
           npx cdk synth

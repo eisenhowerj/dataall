@@ -16,60 +16,53 @@ venv:
 	@python3 -m venv "venv"
 	@/bin/bash -c "source venv/bin/activate"
 
-install: upgrade-pip install-deploy install-backend install-cdkproxy install-tests install-integration-tests install-custom-auth
-
-upgrade-pip:
-	pip install --upgrade pip setuptools
+install: install-deploy install-backend install-cdkproxy install-tests install-integration-tests install-custom-auth
 
 install-deploy:
-	pip install -r deploy/requirements.txt
+	uv sync --group deploy
 
 install-backend:
-	pip install -r backend/requirements.txt
+	uv sync
 
 install-cdkproxy:
-	pip install -r backend/dataall/base/cdkproxy/requirements.txt
+	uv sync --group cdkproxy
 
 install-tests:
-	pip install -r tests/requirements.txt
+	uv sync --group test
 
 install-integration-tests:
-	pip install -r tests_new/integration_tests/requirements.txt
+	uv sync --group integration
 
 install-custom-auth:
 	pip install -r deploy/custom_resources/custom_authorizer/requirements.txt
 
 lint:
-	pip install ruff
-	ruff check --fix
-	ruff format
+	uvx ruff check --fix
+	uvx ruff format
 
 bandit:
-	pip install bandit
-	python -m bandit -r backend/ | tee bandit.log || true
+	uvx bandit -r backend/ | tee bandit.log || true
 
-check-security: upgrade-pip install-backend install-cdkproxy
-	pip install bandit
-	pip install safety
-	bandit -lll -r backend
-	safety check
+check-security: install-backend install-cdkproxy
+	uvx bandit -lll -r backend
+	uvx safety check
 
-checkov-synth: upgrade-pip install-backend install-cdkproxy install-tests
+checkov-synth: install-backend install-cdkproxy install-tests
 	export PYTHONPATH=./backend:/./tests && \
-	python -m pytest -v -ra -k test_checkov tests
+	uv run python -m pytest -v -ra -k test_checkov tests
 
 test:
 	export PYTHONPATH=./backend:/./tests && \
-	python -m pytest -v -ra tests/
+	uv run python -m pytest -v -ra tests/
 
-integration-tests: upgrade-pip install-integration-tests
+integration-tests: install-integration-tests
 	export PYTHONPATH=./backend:/./tests_new && \
-	python -m pytest -x -v -ra tests_new/integration_tests/ \
+	uv run python -m pytest -x -v -ra tests_new/integration_tests/ \
 		--junitxml=reports/integration_tests.xml
 
-coverage: upgrade-pip install-backend install-cdkproxy install-tests
+coverage: install-backend install-cdkproxy install-tests
 	export PYTHONPATH=./backend:/./tests && \
-	python -m  pytest -x -v -ra tests/ \
+	uv run python -m pytest -x -v -ra tests/ \
 		--junitxml=reports/test-unit.xml \
 		--cov-report xml:cobertura.xml \
 		--cov-report term-missing \
@@ -91,26 +84,22 @@ assume-role:
 	echo "export AWS_SESSION_TOKEN=$$(cat .assume_role_json | jq '.Credentials.SessionToken' -r)" >>.env.assumed_role
 	rm .assume_role_json
 
-drop-tables: upgrade-pip install-backend
-	pip install 'alembic'
+drop-tables: install-backend
 	export PYTHONPATH=./backend && \
-	python backend/migrations/drop_tables.py
+	uv run python backend/migrations/drop_tables.py
 
-upgrade-db: upgrade-pip install-backend
-	pip install 'alembic'
+upgrade-db: install-backend
 	export PYTHONPATH=./backend && \
-	alembic -c backend/alembic.ini upgrade head
+	uv run alembic -c backend/alembic.ini upgrade head
 
-history-db: upgrade-pip install-backend
-	pip install 'alembic'
+history-db: install-backend
 	export PYTHONPATH=./backend && \
-	alembic -c backend/alembic.ini history
+	uv run alembic -c backend/alembic.ini history
 
-generate-migrations: upgrade-pip install-backend
-	pip install 'alembic'
+generate-migrations: install-backend
 	export PYTHONPATH=./backend && \
-	alembic -c backend/alembic.ini upgrade head
-	alembic -c backend/alembic.ini revision -m "describe_changes_shortly" --autogenerate
+	uv run alembic -c backend/alembic.ini upgrade head
+	uv run alembic -c backend/alembic.ini revision -m "describe_changes_shortly" --autogenerate
 
 clean:
 	@rm -fr cdk_out/
