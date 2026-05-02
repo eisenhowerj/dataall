@@ -1,0 +1,262 @@
+name: Deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      envname:
+        description: 'Target environment name (e.g. dev, prod)'
+        required: true
+        type: string
+      git_branch:
+        description: 'Git branch to deploy'
+        required: true
+        default: 'main'
+        type: string
+      aws_region:
+        description: 'AWS region for deployment'
+        required: true
+        default: 'us-east-1'
+        type: string
+      resource_prefix:
+        description: 'Resource prefix (max 19 chars, alphanumeric/hyphens/underscores only)'
+        required: true
+        default: 'dataall'
+        type: string
+      quality_gate:
+        description: 'Run quality gate checks before deploying'
+        required: false
+        default: true
+        type: boolean
+
+permissions:
+  contents: read
+  id-token: write  # Required for OIDC authentication with AWS
+
+env:
+  PYTHON_VERSION: "3.12"
+  NODE_VERSION: "22"
+
+jobs:
+  validate:
+    name: Validate Inputs
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate git_branch and resource_prefix
+        run: |
+          if ! echo "${{ inputs.git_branch }}" | grep -qE '^[a-zA-Z0-9/_.-]+$'; then
+            echo "::error::git_branch '${{ inputs.git_branch }}' contains invalid characters. Allowed: letters, numbers, /, _, ., -"
+            exit 1
+          fi
+          if ! echo "${{ inputs.resource_prefix }}" | grep -qE '^[a-zA-Z0-9_-]+$'; then
+            echo "::error::resource_prefix '${{ inputs.resource_prefix }}' must contain only letters, numbers, hyphens, and underscores."
+            exit 1
+          fi
+          resource_prefix="${{ inputs.resource_prefix }}"
+          if [ ${#resource_prefix} -ge 20 ]; then
+            echo "::error::resource_prefix must be fewer than 20 characters."
+            exit 1
+          fi
+
+  quality-gate:
+    name: Quality Gate
+    needs: [validate]
+    if: ${{ inputs.quality_gate }}
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres
+        env:
+          POSTGRES_DB: dataall
+          POSTGRES_PASSWORD: docker
+          POSTGRES_USER: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Validate DB Migrations
+        env:
+          envname: ${{ inputs.envname }}
+        run: |
+          make drop-tables
+          make upgrade-db
+
+      - name: Security Checks
+        run: make check-security
+
+      - name: Python Lint
+        run: make lint
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Frontend Lint
+        working-directory: frontend
+        run: |
+          npm install
+          npm run copy-config
+          npm run copy-version
+          npm run lint -- --quiet
+
+      - name: Unit Tests & Coverage
+        env:
+          envname: ${{ inputs.envname }}
+        run: make coverage
+
+      - name: Upload Coverage Report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: |
+            cobertura.xml
+            reports/test-unit.xml
+          retention-days: 30
+
+  synth:
+    name: CDK Synth
+    needs: [validate, quality-gate]
+    if: always() && needs.validate.result == 'success' && (needs.quality-gate.result == 'success' || needs.quality-gate.result == 'skipped')
+    runs-on: ubuntu-latest
+    env:
+      CDK_DEFAULT_REGION: ${{ inputs.aws_region }}
+      CDK_DEFAULT_ACCOUNT: ${{ vars.AWS_ACCOUNT_ID }}
+      DATAALL_REPO_BRANCH: ${{ inputs.git_branch }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ inputs.aws_region }}
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Install CDK
+        run: |
+          npm install -g aws-cdk
+          cdk --version
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install deploy dependencies
+        run: uv sync --group deploy
+
+      - name: CDK Synth
+        run: npx cdk synth
+
+      - name: Upload CDK assembly
+        uses: actions/upload-artifact@v4
+        with:
+          name: cdk-assembly
+          path: cdk.out/
+          retention-days: 7
+
+  build-images:
+    name: Build & Push Docker Images
+    needs: [synth]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compute safe image tag
+        id: tag
+        run: |
+          # Replace / with -, strip remaining invalid Docker tag chars, then collapse consecutive hyphens
+          SAFE_BRANCH=$(echo "${{ inputs.git_branch }}" | tr '/' '-' | sed 's/[^a-zA-Z0-9._-]/-/g' | sed -E 's/-+/-/g')
+          echo "value=${SAFE_BRANCH}-${{ github.sha }}" >> "$GITHUB_OUTPUT"
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ inputs.aws_region }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push Lambda image
+        run: |
+          make deploy-image \
+            type=lambda \
+            image-tag=lambdas-${{ steps.tag.outputs.value }} \
+            account=${{ vars.AWS_ACCOUNT_ID }} \
+            region=${{ inputs.aws_region }} \
+            repo=${{ inputs.resource_prefix }}-${{ inputs.envname }}-ecr-repository \
+            "build-args=--build-arg PYTHON_VERSION=python${{ env.PYTHON_VERSION }}"
+
+      - name: Build and push ECS image
+        run: |
+          make deploy-image \
+            type=ecs \
+            image-tag=cdkproxy-${{ steps.tag.outputs.value }} \
+            account=${{ vars.AWS_ACCOUNT_ID }} \
+            region=${{ inputs.aws_region }} \
+            repo=${{ inputs.resource_prefix }}-${{ inputs.envname }}-ecr-repository \
+            "build-args=--build-arg PYTHON_VERSION=python${{ env.PYTHON_VERSION }}"
+
+  deploy:
+    name: CDK Deploy
+    needs: [synth, build-images]
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.envname }}
+    env:
+      CDK_DEFAULT_REGION: ${{ inputs.aws_region }}
+      CDK_DEFAULT_ACCOUNT: ${{ vars.AWS_ACCOUNT_ID }}
+      DATAALL_REPO_BRANCH: ${{ inputs.git_branch }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ inputs.aws_region }}
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Install CDK
+        run: |
+          npm install -g aws-cdk
+          cdk --version
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install deploy dependencies
+        run: uv sync --group deploy
+
+      - name: CDK Deploy
+        run: |
+          npx cdk deploy \
+            --all \
+            --require-approval never \
+            --context envname=${{ inputs.envname }} \
+            --context git_branch=${{ inputs.git_branch }} \
+            --context resource_prefix=${{ inputs.resource_prefix }}
