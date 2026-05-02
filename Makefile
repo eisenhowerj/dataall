@@ -18,9 +18,11 @@ venv:
 	@python3 -m venv "venv"
 	@/bin/bash -c "source venv/bin/activate"
 
-# Bootstrap: install uv at a pinned version if not already present
+# Bootstrap: install uv at the pinned version if missing or if the installed version doesn't match
 .ensure-uv:
-	@command -v uv >/dev/null 2>&1 || pip install uv==$(UV_VERSION)
+	@if ! command -v uv >/dev/null 2>&1 || [ "$$(uv --version 2>/dev/null | awk '{print $$2}')" != "$(UV_VERSION)" ]; then \
+		pip install uv==$(UV_VERSION); \
+	fi
 
 install: .ensure-uv install-deploy install-backend install-cdkproxy install-tests install-integration-tests install-custom-auth
 

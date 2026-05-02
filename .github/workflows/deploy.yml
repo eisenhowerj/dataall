@@ -51,7 +51,8 @@ jobs:
             echo "::error::resource_prefix '${{ inputs.resource_prefix }}' must contain only letters, numbers, hyphens, and underscores."
             exit 1
           fi
-          if [ "${#{{ inputs.resource_prefix }}" -ge 20 ]; then
+          resource_prefix="${{ inputs.resource_prefix }}"
+          if [ ${#resource_prefix} -ge 20 ]; then
             echo "::error::resource_prefix must be fewer than 20 characters."
             exit 1
           fi
@@ -182,8 +183,8 @@ jobs:
       - name: Compute safe image tag
         id: tag
         run: |
-          # Replace any character that is not alphanumeric, hyphen, or period with a hyphen
-          SAFE_BRANCH=$(echo "${{ inputs.git_branch }}" | tr '/' '-' | sed 's/[^a-zA-Z0-9._-]/-/g')
+          # Replace / with -, strip remaining invalid Docker tag chars, then collapse consecutive hyphens
+          SAFE_BRANCH=$(echo "${{ inputs.git_branch }}" | tr '/' '-' | sed 's/[^a-zA-Z0-9._-]/-/g' | sed -E 's/-+/-/g')
           echo "value=${SAFE_BRANCH}-${{ github.sha }}" >> "$GITHUB_OUTPUT"
 
       - name: Configure AWS credentials (OIDC)
