@@ -9,58 +9,64 @@ help:
 	@echo "clean - remove build, test, coverage and Python artifacts locally"
 	@echo "tear-down env={env} - completely destroy stack in the cloud -- be cautious"
 
-.PHONY: venv
+UV_VERSION := 0.11.8
+
+.PHONY: venv .ensure-uv
 venv:
 	@test -d "venv" || mkdir -p "venv"
 	@rm -Rf "venv"
 	@python3 -m venv "venv"
 	@/bin/bash -c "source venv/bin/activate"
 
-install: install-deploy install-backend install-cdkproxy install-tests install-integration-tests install-custom-auth
+# Bootstrap: install uv at a pinned version if not already present
+.ensure-uv:
+	@command -v uv >/dev/null 2>&1 || pip install uv==$(UV_VERSION)
 
-install-deploy:
+install: .ensure-uv install-deploy install-backend install-cdkproxy install-tests install-integration-tests install-custom-auth
+
+install-deploy: .ensure-uv
 	uv sync --group deploy
 
-install-backend:
+install-backend: .ensure-uv
 	uv sync
 
-install-cdkproxy:
+install-cdkproxy: .ensure-uv
 	uv sync --group cdkproxy
 
-install-tests:
+install-tests: .ensure-uv
 	uv sync --group test
 
-install-integration-tests:
+install-integration-tests: .ensure-uv
 	uv sync --group integration
 
 install-custom-auth:
 	pip install -r deploy/custom_resources/custom_authorizer/requirements.txt
 
-lint:
+lint: .ensure-uv
 	uvx ruff check --fix
 	uvx ruff format
 
-bandit:
+bandit: .ensure-uv
 	uvx bandit -r backend/ | tee bandit.log || true
 
-check-security: install-backend install-cdkproxy
+check-security: .ensure-uv install-backend install-cdkproxy
 	uvx bandit -lll -r backend
 	uvx safety check
 
-checkov-synth: install-backend install-cdkproxy install-tests
+checkov-synth: .ensure-uv install-backend install-cdkproxy install-tests
 	export PYTHONPATH=./backend:/./tests && \
 	uv run python -m pytest -v -ra -k test_checkov tests
 
-test:
+test: .ensure-uv
 	export PYTHONPATH=./backend:/./tests && \
 	uv run python -m pytest -v -ra tests/
 
-integration-tests: install-integration-tests
+integration-tests: .ensure-uv install-integration-tests
 	export PYTHONPATH=./backend:/./tests_new && \
 	uv run python -m pytest -x -v -ra tests_new/integration_tests/ \
 		--junitxml=reports/integration_tests.xml
 
-coverage: install-backend install-cdkproxy install-tests
+coverage: .ensure-uv install-backend install-cdkproxy install-tests
 	export PYTHONPATH=./backend:/./tests && \
 	uv run python -m pytest -x -v -ra tests/ \
 		--junitxml=reports/test-unit.xml \
@@ -84,19 +90,19 @@ assume-role:
 	echo "export AWS_SESSION_TOKEN=$$(cat .assume_role_json | jq '.Credentials.SessionToken' -r)" >>.env.assumed_role
 	rm .assume_role_json
 
-drop-tables: install-backend
+drop-tables: .ensure-uv install-backend
 	export PYTHONPATH=./backend && \
 	uv run python backend/migrations/drop_tables.py
 
-upgrade-db: install-backend
+upgrade-db: .ensure-uv install-backend
 	export PYTHONPATH=./backend && \
 	uv run alembic -c backend/alembic.ini upgrade head
 
-history-db: install-backend
+history-db: .ensure-uv install-backend
 	export PYTHONPATH=./backend && \
 	uv run alembic -c backend/alembic.ini history
 
-generate-migrations: install-backend
+generate-migrations: .ensure-uv install-backend
 	export PYTHONPATH=./backend && \
 	uv run alembic -c backend/alembic.ini upgrade head
 	uv run alembic -c backend/alembic.ini revision -m "describe_changes_shortly" --autogenerate

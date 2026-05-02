@@ -195,7 +195,7 @@ class PipelineStack(Stack):
                     f'aws codeartifact login --tool npm --repository {self.codeartifact.codeartifact_npm_repo_name} --domain {self.codeartifact.codeartifact_domain_name} --domain-owner {self.codeartifact.domain.attr_owner}',
                     'npm install -g aws-cdk',
                     f'aws codeartifact login --tool pip --repository {self.codeartifact.codeartifact_pip_repo_name} --domain {self.codeartifact.codeartifact_domain_name} --domain-owner {self.codeartifact.domain.attr_owner}',
-                    'pip install uv',
+                    'pip install uv==0.11.8',
                     'uv sync --group deploy',
                     'cdk synth',
                     'echo ${CODEBUILD_SOURCE_VERSION}',
@@ -212,7 +212,7 @@ class PipelineStack(Stack):
                     build_image=codebuild.LinuxBuildImage.AMAZON_LINUX_2_5,
                 ),
                 partial_build_spec=BuildSpec.from_object(
-                    {'phases': {'install': {'runtime-versions': {'nodejs': '22'}}}}
+                    {'phases': {'install': {'runtime-versions': {'nodejs': '22', 'python': '3.12'}}}}
                 ),
             ),
         )
@@ -527,7 +527,7 @@ class PipelineStack(Stack):
                     commands=[
                         f'aws codeartifact login --tool pip --repository {self.codeartifact.codeartifact_pip_repo_name} --domain {self.codeartifact.codeartifact_domain_name} --domain-owner {self.codeartifact.domain.attr_owner}',
                         f'export envname={self.git_branch}',
-                        'pip install uv',
+                        'pip install uv==0.11.8',
                         'make drop-tables',
                         'make upgrade-db',
                     ],
@@ -539,7 +539,7 @@ class PipelineStack(Stack):
                     id='SecurityChecks',
                     commands=[
                         f'aws codeartifact login --tool pip --repository {self.codeartifact.codeartifact_pip_repo_name} --domain {self.codeartifact.codeartifact_domain_name} --domain-owner {self.codeartifact.domain.attr_owner}',
-                        'pip install uv',
+                        'pip install uv==0.11.8',
                         'make check-security',
                     ],
                     role=self.baseline_codebuild_role.without_policy_updates(),
@@ -549,7 +549,7 @@ class PipelineStack(Stack):
                     id='Lint',
                     commands=[
                         f'aws codeartifact login --tool pip --repository {self.codeartifact.codeartifact_pip_repo_name} --domain {self.codeartifact.codeartifact_domain_name} --domain-owner {self.codeartifact.domain.attr_owner}',
-                        'pip install uv',
+                        'pip install uv==0.11.8',
                         'make lint',
                         'cd frontend',
                         f'aws codeartifact login --tool npm --repository {self.codeartifact.codeartifact_npm_repo_name} --domain {self.codeartifact.codeartifact_domain_name} --domain-owner {self.codeartifact.domain.attr_owner}',
@@ -574,7 +574,7 @@ class PipelineStack(Stack):
                                         'set -eu',
                                         f'aws codeartifact login --tool pip --repository {self.codeartifact.codeartifact_pip_repo_name} --domain {self.codeartifact.codeartifact_domain_name} --domain-owner {self.codeartifact.domain.attr_owner}',
                                         f'export envname={self.git_branch}',
-                                        'pip install uv',
+                                        'pip install uv==0.11.8',
                                         'make coverage',
                                     ]
                                 },
@@ -766,7 +766,7 @@ class PipelineStack(Stack):
                                     f'export ENVNAME={target_env["envname"]}',
                                     f'export AWS_REGION={target_env["region"]}',
                                     f'aws codeartifact login --tool pip --repository {self.codeartifact.codeartifact_pip_repo_name} --domain {self.codeartifact.codeartifact_domain_name} --domain-owner {self.codeartifact.domain.attr_owner}',
-                                    'pip install uv',
+                                    'pip install uv==0.11.8',
                                     'make integration-tests',
                                 ]
                             },

@@ -18,7 +18,7 @@ on:
         default: 'us-east-1'
         type: string
       resource_prefix:
-        description: 'Resource prefix (max 19 chars)'
+        description: 'Resource prefix (max 19 chars, alphanumeric/hyphens/underscores only)'
         required: true
         default: 'dataall'
         type: string
@@ -37,8 +37,28 @@ env:
   NODE_VERSION: "22"
 
 jobs:
+  validate:
+    name: Validate Inputs
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate git_branch and resource_prefix
+        run: |
+          if ! echo "${{ inputs.git_branch }}" | grep -qE '^[a-zA-Z0-9/_.-]+$'; then
+            echo "::error::git_branch '${{ inputs.git_branch }}' contains invalid characters. Allowed: letters, numbers, /, _, ., -"
+            exit 1
+          fi
+          if ! echo "${{ inputs.resource_prefix }}" | grep -qE '^[a-zA-Z0-9_-]+$'; then
+            echo "::error::resource_prefix '${{ inputs.resource_prefix }}' must contain only letters, numbers, hyphens, and underscores."
+            exit 1
+          fi
+          if [ "${#{{ inputs.resource_prefix }}" -ge 20 ]; then
+            echo "::error::resource_prefix must be fewer than 20 characters."
+            exit 1
+          fi
+
   quality-gate:
     name: Quality Gate
+    needs: [validate]
     if: ${{ inputs.quality_gate }}
     runs-on: ubuntu-latest
     services:
@@ -108,8 +128,8 @@ jobs:
 
   synth:
     name: CDK Synth
-    needs: [quality-gate]
-    if: always() && (needs.quality-gate.result == 'success' || needs.quality-gate.result == 'skipped')
+    needs: [validate, quality-gate]
+    if: always() && needs.validate.result == 'success' && (needs.quality-gate.result == 'success' || needs.quality-gate.result == 'skipped')
     runs-on: ubuntu-latest
     env:
       CDK_DEFAULT_REGION: ${{ inputs.aws_region }}
@@ -156,10 +176,15 @@ jobs:
     name: Build & Push Docker Images
     needs: [synth]
     runs-on: ubuntu-latest
-    env:
-      IMAGE_TAG: ${{ inputs.git_branch }}-${{ github.sha }}
     steps:
       - uses: actions/checkout@v4
+
+      - name: Compute safe image tag
+        id: tag
+        run: |
+          # Replace any character that is not alphanumeric, hyphen, or period with a hyphen
+          SAFE_BRANCH=$(echo "${{ inputs.git_branch }}" | tr '/' '-' | sed 's/[^a-zA-Z0-9._-]/-/g')
+          echo "value=${SAFE_BRANCH}-${{ github.sha }}" >> "$GITHUB_OUTPUT"
 
       - name: Configure AWS credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@v4
@@ -172,10 +197,9 @@ jobs:
 
       - name: Build and push Lambda image
         run: |
-          REPOSITORY_URI=${{ vars.AWS_ACCOUNT_ID }}.dkr.ecr.${{ inputs.aws_region }}.amazonaws.com/${{ inputs.resource_prefix }}-${{ inputs.envname }}-ecr-repository
           make deploy-image \
             type=lambda \
-            image-tag=lambdas-${IMAGE_TAG} \
+            image-tag=lambdas-${{ steps.tag.outputs.value }} \
             account=${{ vars.AWS_ACCOUNT_ID }} \
             region=${{ inputs.aws_region }} \
             repo=${{ inputs.resource_prefix }}-${{ inputs.envname }}-ecr-repository \
@@ -185,7 +209,7 @@ jobs:
         run: |
           make deploy-image \
             type=ecs \
-            image-tag=cdkproxy-${IMAGE_TAG} \
+            image-tag=cdkproxy-${{ steps.tag.outputs.value }} \
             account=${{ vars.AWS_ACCOUNT_ID }} \
             region=${{ inputs.aws_region }} \
             repo=${{ inputs.resource_prefix }}-${{ inputs.envname }}-ecr-repository \
