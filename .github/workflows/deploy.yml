@@ -143,7 +143,7 @@ jobs:
         run: uv sync --group deploy
 
       - name: CDK Synth
-        run: uv run npx cdk synth
+        run: npx cdk synth
 
       - name: Upload CDK assembly
         uses: actions/upload-artifact@v4
@@ -229,7 +229,7 @@ jobs:
 
       - name: CDK Deploy
         run: |
-          uv run npx cdk deploy \
+          npx cdk deploy \
             --all \
             --require-approval never \
             --context envname=${{ inputs.envname }} \
